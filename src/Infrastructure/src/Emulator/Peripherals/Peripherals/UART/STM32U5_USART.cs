@@ -120,18 +120,7 @@ namespace Antmicro.Renode.Peripherals.UART
             BufferState = BufferState.Ready;
             RequestReceiveDmaIfNeeded();
 
-            if(receiverTimeoutOccurred != null && receiverTimeoutInterruptEnable.Value)
-            {
-                receiverTimeoutCancellationTokenSrc?.Cancel();
-                receiverTimeoutCancellationTokenSrc = new CancellationTokenSource();
-
-                var timeoutIn = (receiverTimeout.Value * 8000000) / BaudRate;
-                Machine.ScheduleAction(
-                    TimeInterval.FromMicroseconds(timeoutIn),
-                    _ => ReportRxTimeout(receiverTimeoutCancellationTokenSrc.Token),
-                    name: $"{nameof(STM32U5_USART)} Receiver timeout"
-                );
-            }
+            ScheduleReceiverTimeoutIfNeeded();
         }
 
         protected override void QueueEmptied()
@@ -345,11 +334,11 @@ namespace Antmicro.Renode.Peripherals.UART
                     .WithTaggedFlag("EOBIE", 27)
                     .WithWriteCallback((_, __) =>
                         {
-                            // Need to cancel the previous receiverTimeout here
-                            if(!enabled.Value || !receiveEnabled.Value || !receiverTimeoutInterruptEnable.Value)
+                            if(!IsReceiverTimeoutEnabled)
                             {
-                                receiverTimeoutCancellationTokenSrc?.Cancel();
+                                CancelReceiverTimeout();
                             }
+                            UpdateInterrupt();
                         }
                     );
 
@@ -363,7 +352,13 @@ namespace Antmicro.Renode.Peripherals.UART
                     .WithTaggedFlag("LINEN", 14)
                     .WithTaggedFlag("ABREN", 20)
                     .WithTag("ABRMOD", 21, 2)
-                    .WithTaggedFlag("RTOEN", 23);
+                    .WithFlag(23, out receiverTimeoutEnable, writeCallback: (_, value) =>
+                    {
+                        if(!value)
+                        {
+                            CancelReceiverTimeout();
+                        }
+                    }, name: "RTOEN");
 
                 cr3
                     .WithTaggedFlag("IREN", 1)
@@ -380,7 +375,7 @@ namespace Antmicro.Renode.Peripherals.UART
 
                 isr
                     .WithTaggedFlag("LBDF", 8)
-                    .WithFlag(11, FieldMode.Read, valueProviderCallback: _ => receiverTimeoutInterruptEnable.Value && (receiverTimeoutOccurred?.Value ?? false), name: "RTOF")
+                    .WithFlag(11, FieldMode.Read, valueProviderCallback: _ => receiverTimeoutOccurred?.Value ?? false, name: "RTOF")
                     .WithTaggedFlag("EOBF", 12)
                     .WithTaggedFlag("ABRE", 14)
                     .WithTaggedFlag("ABRF", 15)
@@ -451,9 +446,39 @@ namespace Antmicro.Renode.Peripherals.UART
             var readRegisterNotEmptyInterrupt = Count != 0 && readRegisterNotEmptyInterruptEnabled.Value;
 
             // This interrupt is expected to fire if there are not additional bits incoming after some specified time after last reception
-            var receiverTimeoutInterrupt = (receiverTimeoutOccurred?.Value ?? false) && receiverTimeoutInterruptEnable.Value;
+            var receiverTimeoutInterrupt = (receiverTimeoutOccurred?.Value ?? false) && (receiverTimeoutInterruptEnable?.Value ?? false);
 
             IRQ.Set(transmitRegisterEmptyInterrupt || transferCompleteInterrupt || readRegisterNotEmptyInterrupt || receiverTimeoutInterrupt);
+        }
+
+        private void ScheduleReceiverTimeoutIfNeeded()
+        {
+            if(receiverTimeoutOccurred == null || !IsReceiverTimeoutEnabled || baudRateDivisor.Value == 0)
+            {
+                return;
+            }
+
+            var baudRate = BaudRate;
+            if(baudRate == 0)
+            {
+                return;
+            }
+
+            CancelReceiverTimeout();
+            var cancellationTokenSource = new CancellationTokenSource();
+            receiverTimeoutCancellationTokenSrc = cancellationTokenSource;
+
+            var timeoutIn = (receiverTimeout.Value * 8000000) / baudRate;
+            Machine.ScheduleAction(
+                TimeInterval.FromMicroseconds(timeoutIn),
+                _ => ReportRxTimeout(cancellationTokenSource.Token),
+                name: $"{nameof(STM32U5_USART)} Receiver timeout"
+            );
+        }
+
+        private void CancelReceiverTimeout()
+        {
+            receiverTimeoutCancellationTokenSrc?.Cancel();
         }
 
         private void ReportRxTimeout(CancellationToken ct)
@@ -485,6 +510,8 @@ namespace Antmicro.Renode.Peripherals.UART
 
         private uint BaudRateMultiplier => lowPowerMode ? 256u : over8.Value ? 2u : 1u;
 
+        private bool IsReceiverTimeoutEnabled => enabled.Value && receiveEnabled.Value && (receiverTimeoutEnable?.Value ?? false);
+
         private bool transmitDmaRequestScheduled;
 
         private CancellationTokenSource receiverTimeoutCancellationTokenSrc;
@@ -510,6 +537,7 @@ namespace Antmicro.Renode.Peripherals.UART
         private IValueRegisterField baudRateDivisor;
         private IValueRegisterField stopBits;
         private IFlagRegisterField over8;
+        private IFlagRegisterField receiverTimeoutEnable;
         private IFlagRegisterField receiverTimeoutInterruptEnable;
         private IFlagRegisterField receiverTimeoutOccurred;
         private IValueRegisterField receiverTimeout;

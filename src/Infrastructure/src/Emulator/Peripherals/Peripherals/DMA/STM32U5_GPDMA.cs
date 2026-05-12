@@ -250,17 +250,22 @@ namespace Antmicro.Renode.Peripherals.DMA
                             //TODO: check GPDMA_CxBR1,GPDMA_CxSAR, and GPDMA_CxDAR
                             channelEnable.Value = false;
                             channelSuspend.Value = false;
+                            ClearFlags();
+                            Update();
                         }
                     },
                     valueProviderCallback: _ => false, name: "RESET (RESET)")
                     .WithFlag(2, out channelSuspend,
-                    writeCallback: (_, val) =>
-                    {
-                        if(val)
+                        writeCallback: (_, val) =>
                         {
-                            // TODO
-                        }
-                    }, name: "SUSPEND (SUSP)")
+                            if(val)
+                            {
+                                parent.Log(LogLevel.Noisy, "GPDMA channel {0} suspend requested. Enabled: {1}, BNDT: {2}",
+                                    channelNumber, channelEnable.Value, blockNumberDataBytesFromSource.Value);
+                                CompletedSuspension = true;
+                            }
+                            Update();
+                        }, name: "SUSPEND (SUSP)")
                     .WithReservedBits(3, 5)
                     .WithFlag(8, out transferCompleteInterruptEnable, name: "Transfer complete interrupt enable (TCIE)")
                     .WithFlag(9, out halfTransferInterruptEnable, name: "Half transfer interrupt enable (HTIE)")
@@ -363,8 +368,8 @@ namespace Antmicro.Renode.Peripherals.DMA
             public void Reset()
             {
                 registers.Reset();
-                TransferComplete = false;
-                HalfTransfer = false;
+                ClearFlags();
+                interrupt.Unset();
             }
 
             public bool TryTriggerTransfer()
@@ -427,7 +432,7 @@ namespace Antmicro.Renode.Peripherals.DMA
 
             public bool GlobalInterrupt => HalfTransfer || TransferComplete || DataTransferError || UpdateLinkTransferError || UserSettingError || CompletedSuspension || TriggerOverrun;
 
-            public bool Enabled => channelEnable.Value;
+            public bool Enabled => channelEnable.Value && !channelSuspend.Value;
 
             public bool HalfTransfer { get; set; }
 
@@ -469,6 +474,17 @@ namespace Antmicro.Renode.Peripherals.DMA
                 interrupt.Set(result);
 
                 parent.Log(LogLevel.Noisy, "Update of channel {0} triggered. Interrupt set: {1}", channelNumber, result);
+            }
+
+            private void ClearFlags()
+            {
+                TransferComplete = false;
+                HalfTransfer = false;
+                DataTransferError = false;
+                UpdateLinkTransferError = false;
+                UserSettingError = false;
+                CompletedSuspension = false;
+                TriggerOverrun = false;
             }
 
             private void DoTransfer()
