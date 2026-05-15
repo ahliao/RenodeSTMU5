@@ -22,6 +22,22 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
     frequency: 16000000
     IRQ -> nvic@46
 
+lptim1: Timers.STM32U5_LpTimer @ sysbus 0x46004400
+    frequency: 32000
+    -> nvic@67
+
+lptim2: Timers.STM32U5_LpTimer @ sysbus 0x40009400
+    frequency: 16000000
+    -> nvic@68
+
+lptim3: Timers.STM32U5_LpTimer @ sysbus 0x46004800
+    frequency: 16000000
+    -> nvic@98
+
+lptim4: Timers.STM32U5_LpTimer @ sysbus 0x46004C00
+    frequency: 16000000
+    -> nvic@110
+
 gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus <0x42020000, +0x400>
     modeResetValue: 0xABFFFFFF
     outputSpeedResetValue: 0x0C000000
@@ -33,28 +49,16 @@ exti: IRQControllers.STM32WBA_EXTI @ sysbus 0x06040000
     numberOfOutputLines: 24
     [0-15] -> nvic@[11-26]
     
-rcc: Python.PythonPeripheral @ sysbus 0x40021000
-    size: 0x400
-    initable: true
-    script: '''
-if request.IsInit:
-    lastVal = 0
-else:
-    lastVal = 1 - lastVal
-    request.Value = lastVal * 0xFFFFFFFF
-    if request.Offset == 0x0:
-        request.Value = request.Value | (1 << 17)
-'''
+rcc: Miscellaneous.STM32U5_RCC @ sysbus 0x46020C00
+    nvic: nvic
+    lptim1: lptim1
+    lsiFrequency: 32000
+    lptim2: lptim2
+    lptim3: lptim3
+    lptim4: lptim4
 
 sysbus:
     init:
         ApplySVD @renode/STM32U5A5.svd
-        // Hard set all oscillator RDY bits
-        Tag <0x46020C00 4> "RCC_CR" 0x2A020402
-
-        // Hard set HSI16 oscillator as system clock
-        Tag <0x46020C1C 4> "RCC_CFGR1" 0x00000005
-        Tag <0x46020C20 4> "RCC_CFGR2" 0x00006000
-
         Tag <0x40007000 0x400> "PWR"
         Tag <0xE0001000 0xffb> "DWT"
